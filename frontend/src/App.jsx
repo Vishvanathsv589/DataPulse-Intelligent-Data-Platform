@@ -77,6 +77,7 @@ export default function App() {
   const [eda, setEda] = useState(null)
   const [mlOptions, setMlOptions] = useState(null)
   const [target, setTarget] = useState('')
+  const [executionMode, setExecutionMode] = useState('sequential')
   const [models, setModels] = useState([
     'Logistic Regression',
     'Decision Tree',
@@ -215,6 +216,7 @@ export default function App() {
 
     if (result) {
       setCleanResult(result)
+      await refreshSession()
       setPage('clean')
     }
   }
@@ -233,13 +235,22 @@ export default function App() {
 
   const loadMl = async () => {
     setError('')
+    setExecutionMode('sequential')
 
     try {
+      const currentSession = await api.session()
+      setSession(currentSession)
+      if (!currentSession.status?.clean) {
+        setMlOptions(null)
+        setPage('models')
+        return
+      }
       const result = await api.mlOptions()
       setMlOptions(result)
       setTarget(result.targets[0] || '')
       setPage('models')
     } catch (e) {
+      setMlOptions(null)
       setError(e.message)
       setPage('models')
     }
@@ -250,6 +261,7 @@ export default function App() {
       () => api.train({
         target,
         models,
+        execution_mode: executionMode,
         problem_type: problemType === 'auto' ? null : problemType
       }),
       'Model training completed.'
@@ -295,6 +307,7 @@ export default function App() {
   )
 
   const navigate = async (id) => {
+    if (id === 'models' && page !== 'models') setExecutionMode('sequential')
     setPage(id)
 
     if (id === 'clean') await loadCleaning()
@@ -940,7 +953,9 @@ export default function App() {
             description="Train suitable algorithms, compare their performance and inspect the strongest model."
           />
 
-          {!status.clean ?
+          {!session?.loaded ?
+            <EmptyState icon={FlaskConical} title="Upload a dataset first" text="Upload a CSV or Excel dataset to begin the modelling workflow." action={<button className="button button-primary" onClick={() => navigate('upload')}>Upload dataset</button>} />
+          : !status.clean ?
             <EmptyState
               icon={FlaskConical}
               title="Clean your data before modelling"
@@ -989,6 +1004,16 @@ export default function App() {
                         )}
                       </select>
                     </label>
+                  </div>
+
+                  <div className="field-label model-label">Execution Mode</div>
+                  <div className="execution-modes">
+                    <button type="button" className={`execution-mode ${executionMode === 'sequential' ? 'selected' : ''}`} onClick={() => setExecutionMode('sequential')} disabled={busy}>
+                      <strong>Sequential</strong><span>Train algorithms one after another.</span>
+                    </button>
+                    <button type="button" className={`execution-mode ${executionMode === 'concurrent' ? 'selected' : ''}`} onClick={() => setExecutionMode('concurrent')} disabled={busy}>
+                      <strong>Concurrent</strong><span>Train multiple algorithms at the same time.</span>
+                    </button>
                   </div>
 
                   <div className="field-label model-label">
@@ -1063,7 +1088,9 @@ export default function App() {
             description="Download the cleaned data, anomaly review and a consolidated PDF report of your analysis."
           />
 
-          {!status.clean ?
+          {!session?.loaded ?
+            <EmptyState icon={FileBarChart2} title="No reports available yet" text="Upload and clean a dataset to create downloadable outputs." action={<button className="button button-primary" onClick={() => navigate('upload')}>Upload dataset</button>} />
+          : !status.clean ?
             <EmptyState
               icon={FileBarChart2}
               title="No reports available yet"

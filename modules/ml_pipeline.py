@@ -35,6 +35,8 @@ import math
 import re
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 import numpy as np
 import pandas as pd
@@ -93,6 +95,7 @@ MAX_LIST_ITEMS = 20
 MAX_CORRELATION_PAIRS = 10
 MAX_WARNING_NAMES = 10
 MAX_CORRELATION_COLUMNS = 300
+MAX_MODEL_WORKERS = 2
 
 # Permutation importance (used only when a model has no native importances)
 PERMUTATION_MAX_ROWS = 1000
@@ -757,6 +760,38 @@ def _select_models(all_models, selected_models, aliases):
     return chosen, unavailable
 
 
+def _execute_models(models, execution_mode, train_one, progress_callback):
+    """Run full per-model fit/evaluation tasks and report completed tasks."""
+    if execution_mode not in ('sequential', 'concurrent'):
+        raise ValueError("execution_mode must be 'sequential' or 'concurrent'.")
+    items = list(models.items())
+    results = {}
+    completed = 0
+    callback_lock = Lock()
+
+    def record(item):
+        nonlocal completed
+        name, result = item
+        with callback_lock:
+            completed += 1
+            current = completed
+        if callable(progress_callback):
+            progress_callback(current, len(items), name)
+        return name, result
+
+    if execution_mode == 'concurrent' and len(items) > 1:
+        with ThreadPoolExecutor(max_workers=min(MAX_MODEL_WORKERS, len(items))) as executor:
+            futures = [executor.submit(train_one, item) for item in items]
+            for future in as_completed(futures):
+                name, result = record(future.result())
+                results[name] = result
+    else:
+        for item in items:
+            name, result = record(train_one(item))
+            results[name] = result
+    return {name: results[name] for name, _ in items}
+
+
 def _aligned_probabilities(model, X_test, all_labels):
     """predict_proba with one column per class (zeros for classes unseen in training)."""
     if not hasattr(model, 'predict_proba'):
@@ -769,7 +804,7 @@ def _aligned_probabilities(model, X_test, all_labels):
     return aligned
 
 
-def train_classification_models(X_train, X_test, y_train, y_test, selected_models=None, progress_callback=None) -> dict:
+def train_classification_models(X_train, X_test, y_train, y_test, selected_models=None, progress_callback=None, execution_mode='sequential') -> dict:
     y_train_array = np.asarray(y_train)
     y_test_array = np.asarray(y_test)
     all_labels = np.unique(np.concatenate([y_train_array, y_test_array]))
@@ -796,9 +831,8 @@ def train_classification_models(X_train, X_test, y_train, y_test, selected_model
 
     models_to_train, unavailable = _select_models(all_models, selected_models, CLASSIFICATION_ALIASES)
 
-    results = {}
-    total_models = max(len(models_to_train), 1)
-    for model_index, (name, model) in enumerate(models_to_train.items(), start=1):
+    def train_one(item):
+        name, model = item
         try:
             started = time.perf_counter()
             model.fit(X_train, y_train_array)
@@ -841,18 +875,18 @@ def train_classification_models(X_train, X_test, y_train, y_test, selected_model
             metrics["probabilities"] = probs.tolist() if probs is not None else None
             metrics.update(_cross_validation_metrics(model, X_train, y_train_array, 'classification'))
 
-            results[name] = {"model": model, "metrics": metrics}
+            return name, {"model": model, "metrics": metrics}
         except Exception as error:
             logger.warning("Classification model %s failed: %s", name, error, exc_info=True)
-            results[name] = {"model": None, "error": str(error)}
-        if callable(progress_callback):
-            progress_callback(model_index, total_models, name)
+            return name, {"model": None, "error": str(error)}
+
+    results = _execute_models(models_to_train, execution_mode, train_one, progress_callback)
 
     results.update(unavailable)
     return results
 
 
-def train_regression_models(X_train, X_test, y_train, y_test, selected_models=None, progress_callback=None) -> dict:
+def train_regression_models(X_train, X_test, y_train, y_test, selected_models=None, progress_callback=None, execution_mode='sequential') -> dict:
     y_train_array = np.asarray(y_train, dtype=float)
     y_test_array = np.asarray(y_test, dtype=float)
     target_mean = float(y_train_array.mean())
@@ -875,9 +909,8 @@ def train_regression_models(X_train, X_test, y_train, y_test, selected_models=No
 
     models_to_train, unavailable = _select_models(all_models, selected_models, REGRESSION_ALIASES)
 
-    results = {}
-    total_models = max(len(models_to_train), 1)
-    for model_index, (name, model) in enumerate(models_to_train.items(), start=1):
+    def train_one(item):
+        name, model = item
         scale_target = name in TARGET_SCALED_MODELS
         try:
             started = time.perf_counter()
@@ -908,12 +941,12 @@ def train_regression_models(X_train, X_test, y_train, y_test, selected_models=No
                 # The fitted model predicts in standardised units; keep the
                 # scale so callers can convert predictions back.
                 result["target_scale"] = {"mean": target_mean, "std": target_std}
-            results[name] = result
+            return name, result
         except Exception as error:
             logger.warning("Regression model %s failed: %s", name, error, exc_info=True)
-            results[name] = {"model": None, "error": str(error)}
-        if callable(progress_callback):
-            progress_callback(model_index, total_models, name)
+            return name, {"model": None, "error": str(error)}
+
+    results = _execute_models(models_to_train, execution_mode, train_one, progress_callback)
 
     results.update(unavailable)
     return results

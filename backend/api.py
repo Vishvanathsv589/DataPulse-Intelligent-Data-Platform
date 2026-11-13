@@ -13,7 +13,7 @@ def _core():
     # Support both `python app.py` and `flask --app app run` without creating
     # a second Flask application (and a second, disconnected session store).
     running_module = sys.modules.get('__main__')
-    if running_module is not None and hasattr(running_module, 'app'):
+    if running_module is not None and hasattr(running_module, 'cleaned_file') and hasattr(running_module, 'run_training'):
         return running_module
     import app as core
     return core
@@ -49,10 +49,15 @@ def session_info():
     core = _core()
     core.sync_session_state()
     df = core.get_working_df()[0]
+    status = dict(session.get('pipeline_status', {}))
+    # The cleaned file is the source of truth across API and legacy routes.
+    status['clean'] = bool(core.cleaned_file())
+    if status['clean']:
+        session['pipeline_status'] = {**status, 'upload': True}
     payload = {
         'loaded': df is not None,
         'filename': session.get('filename'),
-        'status': session.get('pipeline_status', {}),
+        'status': status,
         'cleaning_summary': core.load_cleaning_summary(),
         'ml_results': core.load_state('ml_results.json'),
     }
@@ -165,7 +170,9 @@ def ml_options():
     core = _core()
     if not core.cleaned_file():
         return _error('Clean your dataset first.', 409)
-    df = pd.read_csv(core.cleaned_file())
+    df, _ = core.get_working_df()
+    if df is None:
+        return _error('Could not read the cleaned dataset. Please clean the dataset again.', 500)
     return jsonify({'targets': [str(c) for c in df.columns if c not in {'_auto_clean_anomaly', '_auto_clean_anomaly_reason'}],
                     'models': list(core.MODEL_CHECKBOXES.values()), 'problem_types': ['auto', 'classification', 'regression']})
 
@@ -173,10 +180,18 @@ def ml_options():
 @api.post('/train')
 def train():
     core = _core()
-    original_df = core.get_df()
-    if not core.cleaned_file() or original_df is None:
-        return _error('Upload and clean your dataset first.', 409)
     data = request.get_json(silent=True) or {}
+    execution_mode = data.get('execution_mode', 'sequential')
+    if execution_mode not in ('sequential', 'concurrent'):
+        return _error("execution_mode must be 'sequential' or 'concurrent'.")
+    cleaned_path = core.cleaned_file()
+    if not cleaned_path:
+        return _error('Upload and clean your dataset first.', 409)
+    try:
+        original_df = pd.read_csv(cleaned_path)
+    except Exception as exc:
+        core.app.logger.exception('Could not read cleaned dataset for API training')
+        return _error(f'Could not read the cleaned dataset: {exc}', 500)
     target = data.get('target')
     if target not in original_df.columns:
         return _error('Choose a valid target column.')
@@ -191,9 +206,10 @@ def train():
         df = core.fix_dtypes(original_df.copy())
         core.set_progress(5, 'Preparing original dataset and selected models...', 'Training machine-learning models')
         results, notices = core.run_training(
-            df, target, selected, override, {'encoded_columns': [], 'encoded_labels': {}}, core.chart_dir(),
+            df, target, selected, override, core.load_cleaning_summary() or {'encoded_columns': [], 'encoded_labels': {}}, core.chart_dir(),
             progress_callback=lambda current, total, name: core.set_progress(
-                15 + int(65 * current / total), f'Trained/evaluated {current} of {total} models: {name}', 'Training machine-learning models'))
+                15 + int(65 * current / total), f'Trained/evaluated {current} of {total} models: {name}', 'Training machine-learning models'),
+            execution_mode=execution_mode)
         core.save_state('ml_results.json', results)
         core.update_status(model=True, results=True)
         core.set_progress(100, 'Model training and evaluation completed.', 'Training machine-learning models', 'complete')

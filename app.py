@@ -763,7 +763,7 @@ def label_for_code(value, names):
     return label
 
 
-def run_training(df, target, selected_models, problem_override, cleaning_summary, directory, progress_callback=None):
+def run_training(df, target, selected_models, problem_override, cleaning_summary, directory, progress_callback=None, execution_mode='sequential'):
     """Train, compare, chart and describe. Returns (ml_results, notices)."""
     notices = []
     prob_type = detect_problem_type(df, target, override=problem_override)
@@ -776,9 +776,9 @@ def run_training(df, target, selected_models, problem_override, cleaning_summary
     )
 
     if prob_type == 'classification':
-        results = train_classification_models(X_train, X_test, y_train, y_test, selected_models, progress_callback=progress_callback)
+        results = train_classification_models(X_train, X_test, y_train, y_test, selected_models, progress_callback=progress_callback, execution_mode=execution_mode)
     else:
-        results = train_regression_models(X_train, X_test, y_train, y_test, selected_models, progress_callback=progress_callback)
+        results = train_regression_models(X_train, X_test, y_train, y_test, selected_models, progress_callback=progress_callback, execution_mode=execution_mode)
 
     model_errors = collect_model_errors(results)
     best_model_name, final_results = compare_models(results, prob_type)
@@ -896,6 +896,10 @@ def train_model():
     goal = request.form.get('goal')  # "cleaning", "viz", "ml"
 
     selected_models = [name for key, name in MODEL_CHECKBOXES.items() if key in request.form]
+    execution_mode = request.form.get('execution_mode', 'sequential')
+    if execution_mode not in ('sequential', 'concurrent'):
+        flash('Choose a valid execution mode.', 'error')
+        return redirect(url_for('ml_page'))
 
     if goal != 'ml':
         delete_state('ml_results.json')
@@ -923,6 +927,7 @@ def train_model():
         ml_results, notices = run_training(
             df, target, selected_models, override, model_cleaning_summary, chart_dir(),
             progress_callback=lambda current, total, name: set_progress(15 + int(65 * current / total), f'Trained/evaluated {current} of {total} models: {name}', 'Training machine-learning models'),
+            execution_mode=execution_mode,
         )
         set_progress(88, 'Models trained. Preparing evaluation charts and results...', 'Training machine-learning models')
     except ValueError as error:
