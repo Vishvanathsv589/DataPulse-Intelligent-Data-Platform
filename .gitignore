@@ -1,0 +1,26 @@
+.secret_key
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+user_data/
+uploads/
+static/generated/*
+*.log
+.env
+frontend/node_modules/
+frontend/dist/
+*.egg-info/
+.pytest_cache/
+
+# Local development files
+.specstory/
+project_structure.txt
+git_status.txt
+
+# Environment files
+.env.*
+
+# Sample datasets not required in GitHub
+Iris.csv
+Titanic.csv
