@@ -12,3 +12,5 @@ fpdf==1.7.2
 
 # Optional model family. The platform continues to work without XGBoost.
 xgboost>=2.0.3,<4
+
+gunicorn>=22.0.0,<24
