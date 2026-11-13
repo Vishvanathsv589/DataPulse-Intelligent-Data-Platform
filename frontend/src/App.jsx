@@ -7,7 +7,7 @@ import {
   PanelLeftClose, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Moon, Sun,
   Table2, UploadCloud, WandSparkles, X, Zap, Maximize2, Copy, Download,
 } from 'lucide-react'
-import { api } from './services/api'
+import { api, apiUrl } from './services/api'
 
 const nav = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard, group: 'Workspace' },
@@ -822,7 +822,7 @@ export default function App() {
                   </div>
                   <a
                     className="button button-secondary"
-                    href="/api/downloads/cleaned"
+                    href={apiUrl('/api/downloads/cleaned')}
                   >
                     <ArrowDownToLine size={15}/> Download cleaned CSV
                   </a>
@@ -1083,21 +1083,21 @@ export default function App() {
                 icon={FileSpreadsheet}
                 title="Cleaned dataset"
                 description="Processed CSV with audit columns and anomaly flags."
-                href="/api/downloads/cleaned"
+                href={apiUrl('/api/downloads/cleaned')}
                 type="CSV"
               />
               <ReportItem
                 icon={Activity}
                 title="Flagged anomaly records"
                 description="A separate file containing records marked for human review."
-                href="/api/downloads/anomalies"
+                href={apiUrl('/api/downloads/anomalies')}
                 type="CSV"
               />
               <ReportItem
                 icon={FileBarChart2}
                 title="Full analysis report"
                 description="PDF report with data quality, cleaning decisions, charts and model results when available."
-                href="/api/downloads/report"
+                href={apiUrl('/api/downloads/report')}
                 type="PDF"
               />
             </div>
@@ -1306,7 +1306,7 @@ function ChartCard({ title, description, src, chartKey, chartData, onAction }) {
     setMenuOpen(false)
     if (!src) return
     try {
-      const response = await fetch(src)
+      const response = await fetch(src, {credentials: 'include',})
       if (!response.ok) throw new Error('Chart image could not be loaded')
       const blob = await response.blob()
       if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('Clipboard image copy is unavailable')

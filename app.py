@@ -116,6 +116,14 @@ SESSION_ID_PATTERN = re.compile(r'^[0-9a-f]{16,64}$')
 # TRUSTED_HOSTS="data.example.com,www.example.com"
 TRUSTED_HOSTS = {h.strip() for h in os.environ.get('TRUSTED_HOSTS', '').split(',') if h.strip()}
 
+# Exact frontend origins allowed to call this API with browser credentials.
+# Example: FRONTEND_ORIGINS="https://datapulse-frontend.onrender.com"
+FRONTEND_ORIGINS = {
+    origin.strip().rstrip('/')
+    for origin in os.environ.get('FRONTEND_ORIGINS', '').split(',')
+    if origin.strip()
+}
+
 # Idle sessions (and their files) are deleted after this many hours.
 SESSION_MAX_AGE_SECONDS = int(float(os.environ.get('SESSION_MAX_AGE_HOURS', '24')) * 3600)
 CLEANUP_INTERVAL_SECONDS = 3600
@@ -201,6 +209,21 @@ def add_security_headers(response):
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
     response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
     response.headers.setdefault('Referrer-Policy', 'same-origin')
+    return response
+
+
+@app.after_request
+def add_frontend_cors(response):
+    """Allow credentialed browser requests from the configured frontend only."""
+    origin = request.headers.get('Origin')
+
+    if origin and origin.rstrip('/') in FRONTEND_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        response.headers.add('Vary', 'Origin')
+
     return response
 
 
